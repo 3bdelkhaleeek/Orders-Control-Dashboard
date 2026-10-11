@@ -550,6 +550,24 @@
     </div>
   </section>
 
+  <section id="daSearchSection">
+    <div class="section-title"><h2>DA search by HRID</h2><span class="hint">All orders of one delivery associate over a date range (leave "To" empty for a single day)</span></div>
+    <div class="toolbar">
+      <input type="text" class="search" id="daSearchHrid" placeholder="DA HRID..." style="max-width:220px;flex:none;min-width:160px;">
+      <div class="field"><label>From</label><input type="date" id="daSearchFrom" class="search" style="flex:none;min-width:150px;"></div>
+      <div class="field"><label>To</label><input type="date" id="daSearchTo" class="search" style="flex:none;min-width:150px;"></div>
+      <button class="btn" id="daSearchBtn">Search</button>
+      <span class="muted" id="daSearchStatus" style="font-size:12px;"></span>
+    </div>
+    <div class="stats" id="daSearchSummary" style="grid-template-columns:repeat(5,1fr);"></div>
+    <div class="table-wrap" style="max-height:520px;overflow:auto;">
+      <table class="main">
+        <thead><tr><th>Date</th><th>Order #</th><th>Status</th><th>Placed</th><th>Received</th><th>Completed</th><th>DA time</th><th>Area</th><th>Picker</th></tr></thead>
+        <tbody id="daSearchBody"><tr><td colspan="9" class="leader-empty">Enter a HRID and a date, then press Search</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
   <footer>Data is fetched directly from the control-room API &mdash; the token is sent as a header and is never stored anywhere</footer>
 </div>
 </div>
@@ -2002,6 +2020,130 @@ async function loadData(){
   }finally{ loadBtn.disabled = false; loadBtn.textContent = 'Load data'; }
 }
 loadBtn.addEventListener('click', loadData);
+
+/* ---------- DA search by HRID ---------- */
+function daSearchDates(fromIso, toIso){
+  var out = [];
+  var d = new Date(fromIso + 'T00:00:00');
+  var end = new Date(toIso + 'T00:00:00');
+  while(d <= end && out.length < 31){
+    out.push(d.toLocaleDateString('en-CA'));
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+function daOrderMatches(o, hrid){
+  var list = Array.isArray(o.deliveryPersons) ? o.deliveryPersons : [];
+  return list.some(function(p){ return String(p.hrid || p.hrId || '').toLowerCase() === hrid; });
+}
+function renderDaSearch(found, hrid){
+  var body = document.getElementById('daSearchBody');
+  var sumEl = document.getElementById('daSearchSummary');
+  if(!found.length){
+    sumEl.innerHTML = '';
+    body.innerHTML = '<tr><td colspan="9" class="leader-empty">No orders found for this HRID in the selected dates</td></tr>';
+    return;
+  }
+  found.sort(function(a,b){ return (getReceived(a) || getPlacing(a) || 0) - (getReceived(b) || getPlacing(b) || 0); });
+  var active = found.filter(function(o){ return getStage(o) !== 'cancelled'; });
+  var completed = active.filter(function(o){ return getStage(o) === 'completed'; });
+  var durs = active.map(daDeliveryDuration).filter(function(v){ return v != null; });
+  var avg = durs.length ? durs.reduce(function(a,b){ return a + b; }, 0) / durs.length : null;
+  var trips = 0;
+  buildDaTrips(active).forEach(function(d){ trips += d.trips.length; });
+  var daName = getDaName(found[0]) || hrid;
+  sumEl.innerHTML =
+    '<div class="stat s-das"><div class="n" style="font-size:16px;">' + daName + '</div><div class="l">HRID ' + hrid + '</div></div>' +
+    '<div class="stat s-total"><div class="n">' + active.length + '</div><div class="l">Orders</div></div>' +
+    '<div class="stat s-delivering"><div class="n">' + completed.length + '</div><div class="l">Completed</div></div>' +
+    '<div class="stat s-route"><div class="n">' + trips + '</div><div class="l">Trips</div></div>' +
+    '<div class="stat s-avgdel"><div class="n">' + (avg != null ? fmtDuration(avg) : '—') + '</div><div class="l">Avg. DA time (received to closed)</div></div>';
+  var rowFn = function(o){
+    var stage = getStage(o);
+    var d = daDeliveryDuration(o);
+    var area = (o.area || '') + (o.subArea ? ' · ' + o.subArea : '');
+    return '<tr>' +
+      '<td class="muted">' + o.__searchDate + '</td>' +
+      '<td class="order-id">' + (o.orderNumber || o.id) + '</td>' +
+      '<td><span class="badge ' + stage + '">' + statusLabel(stage) + '</span></td>' +
+      '<td class="time-cell">' + fmtClock(getPlacing(o)) + '</td>' +
+      '<td class="time-cell">' + fmtClock(getReceived(o)) + '</td>' +
+      '<td class="time-cell">' + fmtClock(getCompleted(o)) + '</td>' +
+      '<td class="time-cell">' + (d != null ? fmtDuration(d) : '—') + '</td>' +
+      '<td class="muted">' + area + '</td>' +
+      '<td>' + (getPickerName(o) || '—') + '</td>' +
+      '</tr>';
+  };
+  var notCancelled = function(o){ return getStage(o) !== 'cancelled'; };
+  var avgDur = function(list){
+    var ds = list.map(daDeliveryDuration).filter(function(v){ return v != null; });
+    return ds.length ? ds.reduce(function(a,b){ return a + b; }, 0) / ds.length : null;
+  };
+  var byDay = {};
+  found.forEach(function(o){
+    var day = o.__searchDate;
+    var slot = o.timeSlot || 'Unspecified';
+    if(!byDay[day]) byDay[day] = {};
+    if(!byDay[day][slot]) byDay[day][slot] = [];
+    byDay[day][slot].push(o);
+  });
+  var html = '';
+  Object.keys(byDay).sort().forEach(function(day){
+    var slots = Object.keys(byDay[day]).sort(function(a,b){ return parseSlotStartMinutes(a) - parseSlotStartMinutes(b); });
+    var dayOrders = [];
+    slots.forEach(function(s){ dayOrders = dayOrders.concat(byDay[day][s]); });
+    var dayActive = dayOrders.filter(notCancelled);
+    var dayDone = dayActive.filter(function(o){ return getStage(o) === 'completed'; });
+    var dayAvg = avgDur(dayActive);
+    html += '<tr><td colspan="9" style="background:var(--panel-2);border-bottom:2px solid var(--accent);font-weight:700;">&#128197; ' + day +
+      ' <span class="muted" style="font-weight:400;">&middot; ' + dayActive.length + ' orders &middot; ' + dayDone.length + ' completed' +
+      (dayAvg != null ? ' &middot; avg ' + fmtDuration(dayAvg) : '') + '</span></td></tr>';
+    slots.forEach(function(s){
+      var list = byDay[day][s];
+      var act = list.filter(notCancelled);
+      var a = avgDur(act);
+      html += '<tr><td colspan="9" style="color:var(--blue);font-weight:600;font-size:12px;padding-left:24px;">&#9201; ' + s +
+        ' <span class="muted" style="font-weight:400;">&middot; ' + act.length + ' orders' +
+        (a != null ? ' &middot; avg ' + fmtDuration(a) : '') + '</span></td></tr>';
+      html += list.map(rowFn).join('');
+    });
+  });
+  body.innerHTML = html;
+}
+async function runDaSearch(){
+  var statusEl = document.getElementById('daSearchStatus');
+  var btn = document.getElementById('daSearchBtn');
+  var hrid = document.getElementById('daSearchHrid').value.trim().toLowerCase();
+  var from = document.getElementById('daSearchFrom').value;
+  var to = document.getElementById('daSearchTo').value || from;
+  if(!hrid || !from){ statusEl.textContent = 'Enter the HRID and a start date'; return; }
+  if(to < from){ statusEl.textContent = '"To" date is before "From" date'; return; }
+  var dates = daSearchDates(from, to);
+  var url = endpointInput.value.trim();
+  var token = tokenInput.value.trim();
+  if(!url || !token){ statusEl.textContent = 'Missing endpoint or token'; return; }
+  btn.disabled = true;
+  var found = [];
+  try{
+    for(var i = 0; i < dates.length; i++){
+      statusEl.textContent = 'Loading ' + dates[i] + ' (' + (i + 1) + '/' + dates.length + ')...';
+      var orders = await fetchAllPages(url, token, formatDateForApi(dates[i]));
+      orders.forEach(function(o){
+        if(daOrderMatches(o, hrid)){ o.__searchDate = dates[i]; found.push(o); }
+      });
+    }
+    renderDaSearch(found, hrid);
+    statusEl.textContent = found.length + ' orders found across ' + dates.length + ' day(s)';
+  }catch(e){
+    statusEl.textContent = 'Failed: ' + e.message;
+  }finally{
+    btn.disabled = false;
+    liveStatus.textContent = 'DA search done';
+  }
+}
+document.getElementById('daSearchFrom').value = new Date().toLocaleDateString('en-CA');
+document.getElementById('daSearchBtn').addEventListener('click', runDaSearch);
+document.getElementById('daSearchHrid').addEventListener('keydown', function(e){ if(e.key === 'Enter') runDaSearch(); });
 
 // Auto-load on open since the token is pre-filled
 window.addEventListener('DOMContentLoaded', loadData);

@@ -568,7 +568,61 @@
     </div>
   </section>
 
-  <footer>Data is fetched directly from the control-room API &mdash; the token is sent as a header and is never stored anywhere</footer>
+    <section id="areaReportSection">
+    <div class="section-title"><h2>Area report</h2><span class="hint">Orders per area over a date range · share of total · delivered · on time vs late (leave "To" empty for a single day)</span></div>
+    <div class="toolbar">
+      <div class="field"><label>From</label><input type="date" id="areaFrom" class="search" style="flex:none;min-width:150px;"></div>
+      <div class="field"><label>To</label><input type="date" id="areaTo" class="search" style="flex:none;min-width:150px;"></div>
+      <div class="field"><label>Group by</label>
+        <select id="areaGroupBy" class="search" style="flex:none;min-width:130px;">
+          <option value="area">Area</option>
+          <option value="sub">Sub-area</option>
+        </select>
+      </div>
+      <button class="btn" id="areaBtn">Get report</button>
+      <span class="muted" id="areaStatus" style="font-size:12px;"></span>
+    </div>
+    <div class="stats" id="areaSummary" style="grid-template-columns:repeat(4,1fr);"></div>
+    <div class="table-wrap" style="max-height:560px;overflow:auto;">
+      <table class="main">
+        <thead>
+          <tr><th>#</th><th>Area</th><th>Orders</th><th>% of all orders</th><th>Delivered</th><th>On time</th><th>Late</th><th>Late %</th></tr>
+        </thead>
+        <tbody id="areaBody"><tr><td colspan="8" class="leader-empty">Choose a date range, then press "Get report"</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+<section id="reportsSection">
+  <div class="section-title"><h2>Reports by day</h2><span class="hint">Freshdesk tickets per order (internal reports + customer complaints) · reason · item · action taken · who reported (leave "To" empty for a single day)</span></div>
+  <div class="toolbar">
+    <div class="field"><label>From</label><input type="date" id="repFrom" class="search" style="flex:none;min-width:150px;"></div>
+    <div class="field"><label>To</label><input type="date" id="repTo" class="search" style="flex:none;min-width:150px;"></div>
+    <label style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;"><input type="checkbox" id="repIncComp" checked> Include customer complaints (checks every order, slower)</label>
+    <button class="btn" id="repBtn">Get reports</button>
+    <span class="muted" id="repStatus" style="font-size:12px;"></span>
+  </div>
+  <div class="toolbar" id="repFilters" style="display:none;">
+    <div class="field"><label>Type</label><select id="repFType" class="search" style="flex:none;min-width:120px;"></select></div>
+    <div class="field"><label>Reason</label><select id="repFReason" class="search" style="flex:none;min-width:140px;"></select></div>
+    <div class="field"><label>Reported by</label><select id="repFBy" class="search" style="flex:none;min-width:140px;"></select></div>
+    <div class="field"><label>Action taken</label><select id="repFAction" class="search" style="flex:none;min-width:130px;"></select></div>
+    <div class="field"><label>Picker</label><select id="repFPicker" class="search" style="flex:none;min-width:140px;"></select></div>
+    <div class="field"><label>Day</label><select id="repFDay" class="search" style="flex:none;min-width:130px;"></select></div>
+    <div class="field"><label>Item contains</label><input type="text" id="repFItem" class="search" placeholder="item name" style="flex:none;min-width:150px;"></div>
+    <button class="btn ghost sm" id="repFClear">Clear filters</button>
+    <span class="muted" id="repFCount" style="font-size:12px;"></span>
+  </div>
+  <div class="stats" id="repSummary" style="grid-template-columns:repeat(5,1fr);"></div>
+  <div class="table-wrap" style="max-height:560px;overflow:auto;">
+    <table class="main">
+      <thead><tr><th>Date</th><th>Order #</th><th>Time</th><th>Type</th><th>Reason</th><th>Item</th><th>Action taken</th><th>Refund</th><th>Reported by</th><th>Picker</th><th>Delivery</th><th>Area</th></tr></thead>
+      <tbody id="repBody"><tr><td colspan="12" class="leader-empty">Choose a date range, then press "Get reports"</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<footer>Data is fetched directly from the control-room API &mdash; the token is sent as a header and is never stored anywhere</footer>
 </div>
 </div>
 
@@ -2144,6 +2198,305 @@ async function runDaSearch(){
 document.getElementById('daSearchFrom').value = new Date().toLocaleDateString('en-CA');
 document.getElementById('daSearchBtn').addEventListener('click', runDaSearch);
 document.getElementById('daSearchHrid').addEventListener('keydown', function(e){ if(e.key === 'Enter') runDaSearch(); });
+
+/* ---------- Area report (date range) ---------- */
+function renderAreaReport(orders, groupBy){
+  const scoped = orders.filter(o => getStage(o) !== 'cancelled');
+  const total = scoped.length;
+  const groups = {};
+  scoped.forEach(o=>{
+    const key = ((groupBy === 'sub' ? o.subArea : o.area) || '').trim() || 'Unspecified';
+    const g = groups[key] || (groups[key] = { name:key, count:0, delivered:0, eligible:0, late:0, onTime:0 });
+    g.count++;
+    if(getStage(o) === 'completed') g.delivered++;
+    // same definition as the ETA Late section: completed + not scheduled + valid ETA
+    if(getStage(o) === 'completed' && !isScheduledOrder(o)){
+      const eta = getEta(o), done = getCompleted(o);
+      if(eta != null && done != null){
+        g.eligible++;
+        if(done > eta) g.late++; else g.onTime++;
+      }
+    }
+  });
+  const list = Object.values(groups).sort((a,b)=>b.count-a.count);
+
+  const body = document.getElementById('areaBody');
+  const sum = document.getElementById('areaSummary');
+  if(!list.length){
+    sum.innerHTML = '';
+    body.innerHTML = '<tr><td colspan="8" class="leader-empty">No orders found in the selected dates</td></tr>';
+    return;
+  }
+
+  const tot = list.reduce((s,g)=>({
+    delivered:s.delivered+g.delivered, eligible:s.eligible+g.eligible,
+    late:s.late+g.late, onTime:s.onTime+g.onTime
+  }), {delivered:0, eligible:0, late:0, onTime:0});
+  const pct = (a,b) => b ? ((a/b)*100).toFixed(1)+'%' : '—';
+
+  sum.innerHTML =
+    `<div class="stat s-total"><div class="n">${total}</div><div class="l">Total orders (no cancelled)</div></div>` +
+    `<div class="stat s-delivering"><div class="n">${tot.delivered}</div><div class="l">Delivered</div></div>` +
+    `<div class="stat s-das"><div class="n">${tot.onTime}</div><div class="l">On time</div></div>` +
+    `<div class="stat s-late"><div class="n">${tot.late} <span class="muted" style="font-size:13px;">(${pct(tot.late, tot.eligible)})</span></div><div class="l">Late</div></div>`;
+
+  const rows = list.map((g,i)=>{
+    const rankCls = i===0?'r1':i===1?'r2':i===2?'r3':'';
+    return `<tr>
+      <td><span class="rank-badge ${rankCls}">${i+1}</span></td>
+      <td class="leader-name">${g.name}</td>
+      <td><b>${g.count}</b></td>
+      <td class="time-cell">${pct(g.count,total)}</td>
+      <td class="muted">${g.delivered}</td>
+      <td style="color:var(--good);font-weight:700;">${g.onTime}</td>
+      <td style="color:${g.late?'var(--bad)':'var(--muted)'};font-weight:700;">${g.late}</td>
+      <td class="time-cell ${g.eligible && g.late/g.eligible>0.2?'bad':''}">${pct(g.late,g.eligible)}</td>
+    </tr>`;
+  }).join('');
+  const totalRow = `<tr class="dha-summary-row">
+      <td></td><td class="leader-name">Total</td><td><b>${total}</b></td><td class="time-cell">100%</td>
+      <td>${tot.delivered}</td><td>${tot.onTime}</td><td>${tot.late}</td><td class="time-cell">${pct(tot.late, tot.eligible)}</td>
+    </tr>`;
+  body.innerHTML = rows + totalRow;
+}
+
+async function runAreaReport(){
+  const statusEl = document.getElementById('areaStatus');
+  const btn = document.getElementById('areaBtn');
+  const from = document.getElementById('areaFrom').value;
+  const to = document.getElementById('areaTo').value || from;
+  const groupBy = document.getElementById('areaGroupBy').value;
+  if(!from){ statusEl.textContent = 'Choose a start date'; return; }
+  if(to < from){ statusEl.textContent = '"To" date is before "From" date'; return; }
+  const url = endpointInput.value.trim();
+  const token = tokenInput.value.trim();
+  if(!url || !token){ statusEl.textContent = 'Missing endpoint or token'; return; }
+
+  const dates = daSearchDates(from, to); // max 31 days
+  btn.disabled = true;
+  let all = [];
+  try{
+    for(let i = 0; i < dates.length; i++){
+      statusEl.textContent = `Loading ${dates[i]} (${i+1}/${dates.length})...`;
+      const orders = await fetchAllPages(url, token, formatDateForApi(dates[i]));
+      all = all.concat(orders);
+    }
+    renderAreaReport(all, groupBy);
+    statusEl.textContent = `${all.length} orders loaded across ${dates.length} day(s)`;
+  }catch(e){
+    statusEl.textContent = 'Failed: ' + e.message;
+  }finally{
+    btn.disabled = false;
+    liveStatus.textContent = 'Area report done';
+  }
+}
+document.getElementById('areaFrom').value = new Date().toLocaleDateString('en-CA');
+document.getElementById('areaBtn').addEventListener('click', runAreaReport);
+
+/* ---------- Reports by day (Freshdesk) ---------- */
+function escHtml(s){
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+// fallback item lookup from the dashboard's own reportedIssues (used if no Freshdesk ticket is found)
+function getIssueItems(o, iss){
+  const prods = Array.isArray(o.products) ? o.products : [];
+  const nameOf = p => (p == null ? null : (typeof p !== 'object' ? String(p) : (p.name || p.productName || p.title || p.id || null)));
+  const out = [];
+  const direct = iss.productName || iss.itemName || iss.item || iss.product;
+  if(direct) out.push(nameOf(direct));
+  ['products','items'].forEach(k=>{ if(Array.isArray(iss[k])) iss[k].forEach(x=>out.push(nameOf(x))); });
+  return out.filter(Boolean);
+}
+
+const FD_BASE = 'https://www.breadfast.com/wp-json/freshdesk/v1/freshdesk-wrapper';
+let repRows = [];
+// Freshdesk token per branch (key = branch fpId, same as the Branch dropdown)
+const FD_TOKENS = {
+  '6193d8efe6fcbd8cb3efcd0f': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczpcL1wvd3d3LmJyZWFkZmFzdC5jb20iLCJpYXQiOjE3OTI2MTE4MjUsIm5iZiI6MTc5MjYxMTgyNSwiZXhwIjoxODc5MDExODI1LCJkYXRhIjp7InVzZXIiOnsiaWQiOjE0MDAwNywibW9uZ29JZCI6IjVmMmVmOWQ4MDllMDJjMDdiOTlkMWU1OCIsInJvbGVzIjpbImZwX21hbmFnZXIiXX19fQ.gMAj1hd1FsPB6Jcq2mysnVqCVKvcAr7IknyCSTXc06U', // New Cairo 3
+  '65b10f69472124000d566c73': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczpcL1wvd3d3LmJyZWFkZmFzdC5jb20iLCJpYXQiOjE3OTI2MTE4MjUsIm5iZiI6MTc5MjYxMTgyNSwiZXhwIjoxODc5MDExODI1LCJkYXRhIjp7InVzZXIiOnsiaWQiOjE0MDAwNywibW9uZ29JZCI6IjVmMmVmOWQ4MDllMDJjMDdiOTlkMWU1OCIsInJvbGVzIjpbImZwX21hbmFnZXIiXX19fQ.gMAj1hd1FsPB6Jcq2mysnVqCVKvcAr7IknyCSTXc06U'  // New Cairo 6
+};
+
+function fdOrderQuery(o){
+  const num = [o.orderId, o.id, o.order_id].find(x => x != null && /^\d+$/.test(String(x)));
+  return num ? `cf_order_id:${num}` : `cf_order_number:'${o.orderNumber}'`;
+}
+async function fetchTickets(o, token){
+  const q = '"' + fdOrderQuery(o) + '"';
+  const url = FD_BASE + '?endpoint=' + encodeURIComponent('search/tickets/?query=' + q);
+  const res = await corsFetch(url, { method:'GET', headers:{ 'Authorization': token.startsWith('Bearer')?token:'Bearer '+token, 'Accept':'application/json' } });
+  if(!res.ok) throw new Error('Freshdesk status ' + res.status);
+  const data = await res.json();
+  return Array.isArray(data.results) ? data.results : [];
+}
+function parseTicket(t, o){
+  const cf = t.custom_fields || {};
+  const subj = t.subject || '';
+  const reasonM = subj.match(/\[([^\]]+)\]/);
+  const byM = subj.match(/reported by\s+(.+)$/i);
+  const act = String(cf.cf_action_taken || '');
+  const pi = act.indexOf('*Products:*');
+  let items = [];
+  const action = (pi >= 0 ? act.slice(0, pi) : act).trim();
+  if(pi >= 0) items = act.slice(pi + 11).split('\n').map(x=>x.trim()).filter(Boolean);
+  if(!items.length && Array.isArray(cf.cf_products_ids)){
+    const prods = Array.isArray(o.products) ? o.products : [];
+    items = cf.cf_products_ids.map(id=>{
+      const m = prods.find(p => [p.id,p._id,p.productId].filter(x=>x!=null).map(String).includes(String(id)));
+      return m ? (m.name || m.productName || m.title || String(id)) : String(id);
+    });
+  }
+  const isComplaint = /complaint/i.test(t.type || '') || /-\s*Complaints\b/i.test(subj);
+  if(isComplaint){
+    return { type:'Complaint', reason: subj.replace(/\s*-\s*Complaints\b.*$/i, '').trim() || 'Complaint', by:'Customer', items, action, cx: cf.cf_cx_action_taken || '', refund: cf.cf_refund_amount != null ? cf.cf_refund_amount : null, created: t.created_at };
+  }
+  return { type:'Report', reason: reasonM ? reasonM[1] : 'Unspecified', by: byM ? byM[1].trim() : '—', items, action, cx: cf.cf_cx_action_taken || '', refund:null, created: t.created_at };
+}
+async function mapPool(list, n, fn){
+  let i = 0;
+  await Promise.all(Array.from({length:n}, async()=>{ while(i < list.length){ const k = i++; await fn(list[k], k); } }));
+}
+
+const REP_FILTERS = { reason:'repFReason', by:'repFBy', action:'repFAction', picker:'repFPicker', day:'repFDay', type:'repFType' };
+function repVal(r, k){
+  if(k === 'picker') return getPickerName(r.o) || '—';
+  if(k === 'action') return String(r.action || r.cx || '').split('\n')[0].trim() || '—';
+  return r[k] || '—';
+}
+function filteredRepRows(){
+  const item = (document.getElementById('repFItem').value || '').trim().toLowerCase();
+  return repRows.filter(r=>{
+    for(const k in REP_FILTERS){
+      const v = document.getElementById(REP_FILTERS[k]).value;
+      if(v && repVal(r, k) !== v) return false;
+    }
+    return !item || r.items.join(' ').toLowerCase().includes(item);
+  });
+}
+function populateRepFilters(){
+  const labels = { reason:'All reasons', by:'All reporters', action:'All actions', picker:'All pickers', day:'All days', type:'All types' };
+  for(const k in REP_FILTERS){
+    const el = document.getElementById(REP_FILTERS[k]);
+    const cur = el.value;
+    const vals = [...new Set(repRows.map(r=>repVal(r, k)))].sort();
+    el.innerHTML = `<option value="">${labels[k]}</option>` + vals.map(v=>`<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('');
+    if(vals.includes(cur)) el.value = cur;
+  }
+  document.getElementById('repFilters').style.display = repRows.length ? 'flex' : 'none';
+}
+function renderReportsReport(){
+  const rows = filteredRepRows();
+  document.getElementById('repFCount').textContent = `${rows.length} of ${repRows.length} reports`;
+  const body = document.getElementById('repBody');
+  const sum = document.getElementById('repSummary');
+  if(!rows.length){
+    sum.innerHTML = '';
+    body.innerHTML = '<tr><td colspan="12" class="leader-empty">No reports found</td></tr>';
+    return;
+  }
+  const top = obj => Object.entries(obj).sort((a,b)=>b[1]-a[1])[0];
+  const rc = {}, bc = {};
+  rows.forEach(r=>{ rc[r.reason] = (rc[r.reason]||0)+1; if(r.type !== 'Complaint') bc[r.by] = (bc[r.by]||0)+1; });
+  const tr = top(rc), tb = top(bc) || ['—', 0];
+  const comps = rows.filter(r=>r.type === 'Complaint');
+  const refundSum = comps.reduce((a,r)=>a + (Number(r.refund) || 0), 0);
+  const ordersWith = new Set(rows.map(r=>getOrderKey(r.o))).size;
+  sum.innerHTML =
+    `<div class="stat s-late"><div class="n">${rows.length}</div><div class="l">Total reports</div></div>` +
+    `<div class="stat s-total"><div class="n">${ordersWith}</div><div class="l">Orders with reports</div></div>` +
+    `<div class="stat s-avgwait"><div class="n" style="font-size:15px;">${escHtml(tr[0])} (${tr[1]})</div><div class="l">Top reason</div></div>` +
+    `<div class="stat s-purple"><div class="n" style="font-size:15px;">${escHtml(tb[0])} (${tb[1]})</div><div class="l">Top reporter</div></div>` +
+    `<div class="stat s-delivering"><div class="n">${comps.length} <span class="muted" style="font-size:13px;">(refund ${refundSum})</span></div><div class="l">Customer complaints</div></div>`;
+
+  const byDay = {};
+  rows.forEach(r=>{ (byDay[r.day] = byDay[r.day] || []).push(r); });
+  let html = '';
+  Object.keys(byDay).sort().forEach(day=>{
+    const list = byDay[day];
+    html += `<tr><td colspan="12" style="background:var(--panel-2);border-bottom:2px solid var(--accent);font-weight:700;">&#128197; ${day}
+      <span class="muted" style="font-weight:400;">&middot; ${list.length} report${list.length===1?'':'s'}</span></td></tr>`;
+    html += list.map(r=>{
+      const o = r.o;
+      const area = (o.area || '') + (o.subArea ? ' · ' + o.subArea : '');
+      const actTxt = [r.action, r.cx].filter(Boolean).join(' · ');
+      return `<tr>
+        <td class="muted">${day}</td>
+        <td class="order-id">${escHtml(o.orderNumber || o.id)}</td>
+        <td class="time-cell">${r.created ? fmtClock(toMs(r.created)) : '—'}</td>
+        <td><span class="badge ${r.type==='Complaint'?'cancelled':'packaging'}">${r.type}</span></td>
+        <td><span class="badge report">${escHtml(r.reason)}</span></td>
+        <td style="white-space:normal;min-width:180px;">${r.items.length ? escHtml(r.items.join(', ')) : '<span class="muted">—</span>'}</td>
+        <td class="muted" style="white-space:normal;max-width:220px;">${escHtml(actTxt) || '—'}</td>
+        <td class="time-cell">${r.refund != null ? r.refund : '—'}</td>
+        <td style="font-weight:600;">${escHtml(r.by)}</td>
+        <td>${escHtml(getPickerName(o) || '—')}</td>
+        <td>${escHtml(getDaName(o) || '—')}</td>
+        <td class="muted">${escHtml(area)}</td>
+      </tr>`;
+    }).join('');
+  });
+  body.innerHTML = html;
+}
+
+async function runReportsReport(){
+  const statusEl = document.getElementById('repStatus');
+  const btn = document.getElementById('repBtn');
+  const from = document.getElementById('repFrom').value;
+  const to = document.getElementById('repTo').value || from;
+  if(!from){ statusEl.textContent = 'Choose a start date'; return; }
+  if(to < from){ statusEl.textContent = '"To" date is before "From" date'; return; }
+  const url = endpointInput.value.trim();
+  const dashToken = tokenInput.value.trim();
+  const fdToken = FD_TOKENS[fpIdInput.value] || dashToken;
+  if(!url || !dashToken){ statusEl.textContent = 'Missing endpoint or token'; return; }
+
+  const dates = daSearchDates(from, to);
+  btn.disabled = true;
+  repRows = [];
+  try{
+    const incComp = document.getElementById('repIncComp').checked;
+    const reported = [];
+    for(let i = 0; i < dates.length; i++){
+      statusEl.textContent = `Loading orders ${dates[i]} (${i+1}/${dates.length})...`;
+      const orders = await fetchAllPages(url, dashToken, formatDateForApi(dates[i]));
+      orders.forEach(o=>{
+        if(getStage(o) === 'cancelled' || (!incComp && !getReportedIssues(o).length)) return;
+        o.__searchDate = dates[i];
+        reported.push(o);
+      });
+    }
+    let done = 0, failed = 0;
+    await mapPool(reported, incComp ? 8 : 5, async o=>{
+      let tickets = [];
+      try{ tickets = await fetchTickets(o, fdToken); }catch(e){ failed++; }
+      const parsed = tickets.map(t=>({ o, day:o.__searchDate, ...parseTicket(t, o) }));
+      parsed.forEach(r=>repRows.push(r));
+      if(!parsed.some(r=>r.type === 'Report')){
+        getReportedIssues(o).forEach(iss=>{
+          repRows.push({ o, day:o.__searchDate, type:'Report', reason: iss.reasonName || 'Unspecified', by:'—', items:getIssueItems(o, iss), action: iss.comment || '', cx:'', refund:null, created:null });
+        });
+      }
+      done++;
+      statusEl.textContent = `Freshdesk ${done}/${reported.length}...`;
+    });
+    populateRepFilters();
+    renderReportsReport();
+    statusEl.textContent = `${reported.length} orders with reports across ${dates.length} day(s)` + (failed ? ` · Freshdesk failed for ${failed} (check CORS)` : '');
+  }catch(e){
+    statusEl.textContent = 'Failed: ' + e.message;
+  }finally{
+    btn.disabled = false;
+    liveStatus.textContent = 'Reports done';
+  }
+}
+document.getElementById('repFrom').value = new Date().toLocaleDateString('en-CA');
+document.getElementById('repBtn').addEventListener('click', runReportsReport);
+Object.values(REP_FILTERS).forEach(id=>document.getElementById(id).addEventListener('change', renderReportsReport));
+document.getElementById('repFItem').addEventListener('input', renderReportsReport);
+document.getElementById('repFClear').addEventListener('click', ()=>{
+  Object.values(REP_FILTERS).forEach(id=>{ document.getElementById(id).value = ''; });
+  document.getElementById('repFItem').value = '';
+  renderReportsReport();
+});
 
 // Auto-load on open since the token is pre-filled
 window.addEventListener('DOMContentLoaded', loadData);

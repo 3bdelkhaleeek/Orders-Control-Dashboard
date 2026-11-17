@@ -528,7 +528,7 @@
     </div>
   </section>
 
-  <section>
+  <section style="display:none">
     <div class="section-title"><h2>All orders</h2></div>
     <div class="toolbar">
       <input type="text" class="search" id="searchInput" placeholder="Search by order number or customer name...">
@@ -621,6 +621,7 @@
     <div class="field"><label>Picker</label><select id="repFPicker" class="search" style="flex:none;min-width:140px;"></select></div>
     <div class="field"><label>Day</label><select id="repFDay" class="search" style="flex:none;min-width:130px;"></select></div>
     <div class="field"><label>Item contains</label><input type="text" id="repFItem" class="search" placeholder="item name" style="flex:none;min-width:150px;"></div>
+    <div class="field"><label>Exclude reporters</label><input type="text" id="repFExclude" class="search" placeholder="name1, name2" style="flex:none;min-width:170px;"></div>
     <button class="btn ghost sm" id="repFClear">Clear filters</button>
     <span class="muted" id="repFCount" style="font-size:12px;"></span>
   </div>
@@ -2406,11 +2407,13 @@ function repVal(r, k){
 }
 function filteredRepRows(){
   const item = (document.getElementById('repFItem').value || '').trim().toLowerCase();
+  const excl = (document.getElementById('repFExclude').value || '').split(',').map(s=>s.trim().toLowerCase()).filter(Boolean);
   return repRows.filter(r=>{
     for(const k in REP_FILTERS){
       const v = document.getElementById(REP_FILTERS[k]).value;
       if(v && repVal(r, k) !== v) return false;
     }
+    if(excl.length && excl.some(x=>String(r.by || '').toLowerCase().includes(x))) return false;
     return !item || r.items.join(' ').toLowerCase().includes(item);
   });
 }
@@ -2568,9 +2571,11 @@ document.getElementById('repAutoBtn').addEventListener('click', async ()=>{
 });
 Object.values(REP_FILTERS).forEach(id=>document.getElementById(id).addEventListener('change', renderReportsReport));
 document.getElementById('repFItem').addEventListener('input', renderReportsReport);
+document.getElementById('repFExclude').addEventListener('input', renderReportsReport);
 document.getElementById('repFClear').addEventListener('click', ()=>{
   Object.values(REP_FILTERS).forEach(id=>{ document.getElementById(id).value = ''; });
   document.getElementById('repFItem').value = '';
+  document.getElementById('repFExclude').value = '';
   renderReportsReport();
 });
 
